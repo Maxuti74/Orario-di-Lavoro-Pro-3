@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Orario Lavoro Pro</title>
+
+    <link rel="apple-touch-icon" sizes="180x180" href="icon.png?v=1.1">
+    <meta name="apple-mobile-web-app-title" content="Lavoro Pro">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.28/jspdf.plugin.autotable.min.js"></script>
+
+    <style>
+        body { transition: background-color 0.4s ease; font-family: 'Inter', sans-serif; -webkit-tap-highlight-color: transparent; }
+        .modal-overlay { background: rgba(0,0,0,0.4); backdrop-filter: blur(5px); }
+        .stats-number { font-weight: 700; letter-spacing: -0.02em; }
+        .custom-scrollbar::-webkit-scrollbar { height: 4px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 10px; }
+        
+        input[type="date"], input[type="time"], select, textarea {
+            font-size: 16px !important;
+            -webkit-appearance: none;
+            appearance: none;
+            width: 100%;
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useMemo } = React;
+        
+        const ThemeToggleIcon = ({ darkMode }) => (
+            darkMode ? (
+                <svg width="28" height="28" viewBox="0 0 24 24" fill="#fef08a" stroke="#fef08a" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>
+                </svg>
+            ) : (
+                <svg width="28" height="28" viewBox="0 0 24 24" fill="#1f2937" stroke="#1f2937" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
+                </svg>
+            )
+        );
+
+        const Icon = ({ name, className }) => {
+            useEffect(() => { if (window.lucide) window.lucide.createIcons(); }, [name]);
+            return <i data-lucide={name} className={className}></i>;
+        };
+
+        function TimesheetApp() {
+            const [entries, setEntries] = useState(() => JSON.parse(localStorage.getItem('timesheetEntries')) || []);
+            const [darkMode, setDarkMode] = useState(() => JSON.parse(localStorage.getItem('darkMode')) || false);
+            const [initialOvertimeBalance, setInitialOvertimeBalance] = useState(() => parseFloat(localStorage.getItem('initialOvertimeBalance')) || 0);
+            const [standardHoursPerDay, setStandardHoursPerDay] = useState(() => parseFloat(localStorage.getItem('standardHoursPerDay')) || 8);
+            const [standardHoursPerWeek, setStandardHoursPerWeek] = useState(() => parseFloat(localStorage.getItem('standardHoursPerWeek')) || 40);
+
+            const [activeModule, setActiveModule] = useState(null); 
+            const [formData, setFormData] = useState({
+                date: new Date().toISOString().split('T')[0],
+                type: 'Lavoro', startTime: '09:00', endTime: '18:00', breakMinutes: 60, notes: ''
+            });
+
+            const [exportRange, setExportRange] = useState({ start: '', end: '' });
+
+            useEffect(() => {
+                localStorage.setItem('timesheetEntries', JSON.stringify(entries));
+                localStorage.setItem('darkMode', JSON.stringify(darkMode));
+                localStorage.setItem('initialOvertimeBalance', initialOvertimeBalance);
+                localStorage.setItem('standardHoursPerDay', standardHoursPerDay);
+                localStorage.setItem('standardHoursPerWeek', standardHoursPerWeek);
+            }, [entries, darkMode, initialOvertimeBalance, standardHoursPerDay, standardHoursPerWeek]);
+
+            const stats = useMemo(() => entries.reduce((acc, e) => {
+                if (e.type === 'Lavoro') { 
+                    acc.work += e.hours; 
+                    acc.ovt += (e.hours - standardHoursPerDay); 
+                }
+                else if (e.type === 'Malattia') acc.sick += e.hours;
+                else if (e.type === 'Ferie') acc.vacation += e.hours;
+                return acc;
+            }, { work: 0, sick: 0, vacation: 0, ovt: initialOvertimeBalance }), [entries, standardHoursPerDay, initialOvertimeBalance]);
+
+            const saveEntry = () => {
+                let hours = 0;
+                if (formData.type === 'Lavoro') {
+                    if (!formData.startTime || !formData.endTime) return alert("Inserisci orari");
+                    const start = new Date(`${formData.date}T${formData.startTime}`);
+                    const end = new Date(`${formData.date}T${formData.endTime}`);
+                    let diffMs = end - start;
+                    if (diffMs < 0) diffMs += 86400000;
+                    hours = (diffMs / 60000 - formData.breakMinutes) / 60;
+                } else { hours = standardHoursPerDay; }
+                
+                setEntries([{ id: Date.now(), ...formData, hours }, ...entries].sort((a,b) => new Date(b.date)-new Date(a.date)));
+                setActiveModule(null);
+            };
+
+            const exportPDF = (filterType) => {
+                try {
+                    const { jsPDF } = window.jspdf;
+                    const doc = new jsPDF();
+                    let filtered = [...entries].sort((a,b) => new Date(a.date) - new Date(b.date));
+
+                    if (filterType === 'range') {
+                        if (!exportRange.start || !exportRange.end) return alert("Seleziona entrambe le date");
+                        filtered = filtered.filter(e => e.date >= exportRange.start && e.date <= exportRange.end);
+                    }
+
+                    if (filtered.length === 0) return alert("Nessun dato da esportare per il periodo selezionato");
+
+                    // Header
+                    doc.setFontSize(18);
+                    doc.setTextColor(79, 70, 229);
+                    doc.text("Report Orario Lavoro Pro", 14, 20);
+                    
+                    doc.setFontSize(10);
+                    doc.setTextColor(100);
+                    doc.text(`Generato il: ${new Date().toLocaleDateString('it-IT')}`, 14, 28);
+                    if (filterType === 'range') doc.text(`Periodo: ${exportRange.start} / ${exportRange.end}`, 14, 34);
+
+                    // Tabella
+                    const tableData = filtered.map(e => [
+                        new Date(e.date).toLocaleDateString('it-IT'),
+                        e.type,
+                        e.type === 'Lavoro' ? `${e.startTime} - ${e.endTime}` : '-',
+                        e.type === 'Lavoro' ? `${e.breakMinutes}m` : '-',
+                        `${e.hours.toFixed(2)}h`
+                    ]);
+
+                    doc.autoTable({
+                        startY: 40,
+                        head: [['Data', 'Tipo', 'Orario', 'Pausa', 'Totale']],
+                        body: tableData,
+                        headStyles: { fillColor: [79, 70, 229] },
+                        margin: { top: 40 }
+                    });
+
+                    // Calcoli per il footer del PDF
+                    const pdfStats = filtered.reduce((acc, e) => {
+                        if (e.type === 'Lavoro') {
+                            acc.work += e.hours;
+                            acc.ovt += (e.hours - standardHoursPerDay);
+                        } else if (e.type === 'Malattia') acc.sick += e.hours;
+                        else if (e.type === 'Ferie') acc.vacation += e.hours;
+                        return acc;
+                    }, { work: 0, sick: 0, vacation: 0, ovt: 0 });
+
+                    const finalY = doc.lastAutoTable.finalY + 15;
+                    doc.setDrawColor(200);
+                    doc.line(14, finalY, 196, finalY);
+                    
+                    doc.setFontSize(12);
+                    doc.setTextColor(0);
+                    doc.setFont(undefined, 'bold');
+                    doc.text("Riepilogo Periodo Esportato:", 14, finalY + 10);
+                    
+                    doc.setFont(undefined, 'normal');
+                    doc.setFontSize(10);
+                    doc.text(`Ore Lavorate: ${pdfStats.work.toFixed(2)}h`, 14, finalY + 18);
+                    doc.text(`Saldo Straordinari Periodo: ${pdfStats.ovt >= 0 ? '+' : ''}${pdfStats.ovt.toFixed(2)}h`, 14, finalY + 24);
+                    
+                    doc.setTextColor(79, 70, 229);
+                    doc.setFontSize(13);
+                    doc.text(`SALDO TOTALE STORICO: ${stats.ovt >= 0 ? '+' : ''}${stats.ovt.toFixed(2)}h`, 14, finalY + 36);
+
+                    doc.save(`Report_${new Date().toISOString().split('T')[0]}.pdf`);
+                    setActiveModule(null);
+                } catch (error) {
+                    console.error("Errore PDF:", error);
+                    alert("Errore durante la generazione del PDF. Riprova.");
+                }
+            };
+
+            const styles = {
+                bg: darkMode ? 'bg-gray-900 text-white' : 'bg-slate-50 text-gray-800',
+                card: darkMode ? 'bg-gray-800 border-gray-700 text-white' : 'bg-white border-gray-200 text-gray-800',
+                input: darkMode ? 'bg-gray-700 border-gray-600 text-white' : 'bg-white border-gray-200 text-gray-800',
+                btnSettings: darkMode ? 'bg-gray-700 text-gray-200 border border-gray-600' : 'bg-gray-200 text-gray-700 border border-gray-300',
+                btnBalance: darkMode ? 'bg-purple-900 text-purple-100 border border-purple-800' : 'bg-purple-100 text-purple-700 border border-purple-200'
+            };
+
+            return (
+                <div className={`min-h-screen ${styles.bg} p-4 pb-12 transition-all duration-300`}>
+                    <div className="max-w-md mx-auto space-y-4">
+                        
+                        <div className="flex justify-between items-center py-2">
+                            <h1 className="text-xl font-bold flex items-center gap-2">
+                                <Icon name="clock" className="text-indigo-500" /> Orario Lavoro Pro
+                            </h1>
+                            <button 
+                                onClick={() => setDarkMode(!darkMode)} 
+                                className={`w-12 h-12 flex items-center justify-center rounded-2xl shadow-lg border transition-all active:scale-90 ${darkMode ? 'bg-gray-800 border-gray-600' : 'bg-white border-gray-200'}`}
+                            >
+                                <ThemeToggleIcon darkMode={darkMode} />
+                            </button>
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-3">
+                            <button onClick={() => setActiveModule('new')} className="bg-indigo-600 text-white p-4 rounded-3xl shadow-lg font-bold flex flex-col items-center gap-1 active:scale-95 transition-all">
+                                <Icon name="plus" /> Nuovo Giorno
+                            </button>
+                            <button onClick={() => setActiveModule('export')} className="bg-emerald-600 text-white p-4 rounded-3xl shadow-lg font-bold flex flex-col items-center gap-1 active:scale-95 transition-all">
+                                <Icon name="file-text" /> Esporta Report
+                            </button>
+                            <button onClick={() => setActiveModule('settings')} className={`${styles.btnSettings} p-3.5 rounded-2xl flex items-center justify-center gap-2 font-bold transition-all shadow-sm`}>
+                                <Icon name="settings" className="w-4 h-4" /> Impostazioni
+                            </button>
+                            <button onClick={() => setActiveModule('balance')} className={`${styles.btnBalance} p-3.5 rounded-2xl flex items-center justify-center gap-2 font-bold transition-all shadow-sm`}>
+                                <Icon name="database" className="w-4 h-4" /> Saldo Iniziale
+                            </button>
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-3">
+                            <div className="bg-blue-600 text-white p-4 rounded-[2rem] shadow-md border-b-4 border-blue-700">
+                                <span className="text-[10px] font-bold uppercase opacity-80 flex items-center gap-1"><Icon name="briefcase" className="w-3 h-3"/> Lavorate</span>
+                                <p className="text-3xl stats-number">{stats.work.toFixed(1)}h</p>
+                            </div>
+                            <div className="bg-purple-600 text-white p-4 rounded-[2rem] shadow-md border-b-4 border-purple-700">
+                                <span className="text-[10px] font-bold uppercase opacity-80 flex items-center gap-1"><Icon name="trending-up" className="w-3 h-3"/> Saldo Totale</span>
+                                <p className="text-3xl stats-number">{stats.ovt >= 0 ? '+' : ''}{stats.ovt.toFixed(1)}h</p>
+                            </div>
+                        </div>
+
+                        <div className={`${styles.card} p-5 rounded-[2.5rem] border shadow-sm`}>
+                            <h2 className="font-bold mb-5 flex items-center gap-2 opacity-70 uppercase text-[10px] tracking-widest"><Icon name="list" className="w-4 h-4 text-indigo-500"/> Registro</h2>
+                            <div className="space-y-3">
+                                {entries.length === 0 ? <p className="text-center py-6 text-sm opacity-30 italic">Nessun dato presente</p> : 
+                                 entries.map(e => (
+                                    <div key={e.id} className="p-4 rounded-3xl bg-gray-50 dark:bg-gray-900/30 border border-gray-100 dark:border-gray-700">
+                                        <div className="flex justify-between items-start mb-2">
+                                            <div>
+                                                <span className="font-bold text-sm">{new Date(e.date).toLocaleDateString('it-IT', {day:'2-digit', month:'short'})}</span>
+                                                <span className={`ml-2 text-[9px] px-2 py-0.5 rounded-full font-bold border ${e.type === 'Lavoro' ? 'bg-blue-100 text-blue-700 border-blue-200' : e.type === 'Ferie' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+                                                    {e.type.toUpperCase()}
+                                                </span>
+                                            </div>
+                                            <p className="text-lg font-bold text-indigo-500">{e.hours.toFixed(1)}h</p>
+                                        </div>
+                                        {e.type === 'Lavoro' && (
+                                            <div className="flex gap-3 text-[10px] opacity-70 font-medium mb-2">
+                                                <span>{e.startTime} - {e.endTime}</span>
+                                                <span>({e.breakMinutes}m pausa)</span>
+                                            </div>
+                                        )}
+                                        <div className="flex justify-between items-center border-t border-gray-100 dark:border-gray-800 pt-2 mt-2">
+                                            <p className="text-[10px] opacity-50 italic truncate max-w-[150px]">{e.notes || 'Senza note'}</p>
+                                            <button onClick={() => setEntries(entries.filter(i => i.id !== e.id))} className="text-[10px] text-red-400 font-bold uppercase hover:text-red-600 transition-colors">Elimina</button>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* MODULI OVERLAY */}
+                    {activeModule && (
+                        <div className="fixed inset-0 modal-overlay z-50 flex items-center justify-center p-4">
+                            <div className={`${styles.card} w-full max-w-sm rounded-[2.5rem] shadow-2xl p-6 relative animate-in zoom-in-95 duration-200`}>
+                                <button onClick={() => setActiveModule(null)} className="absolute top-6 right-6 text-gray-400 hover:text-gray-600 p-2"><Icon name="x" /></button>
+                                
+                                {activeModule === 'new' && (
+                                    <div className="space-y-4">
+                                        <h2 className="text-lg font-bold mb-4">Nuovo Giorno</h2>
+                                        <div className="space-y-3">
+                                            <input type="date" value={formData.date} onChange={e => setFormData({...formData, date: e.target.value})} className={`p-3 rounded-2xl border ${styles.input}`} />
+                                            <select value={formData.type} onChange={e => setFormData({...formData, type: e.target.value})} className={`p-3 rounded-2xl border ${styles.input}`}>
+                                                <option value="Lavoro">Lavoro</option>
+                                                <option value="Malattia">Malattia</option>
+                                                <option value="Ferie">Ferie</option>
+                                            </select>
+                                            {formData.type === 'Lavoro' && (
+                                                <div className="space-y-3">
+                                                    <div className="grid grid-cols-2 gap-2">
+                                                        <input type="time" value={formData.startTime} onChange={e => setFormData({...formData, startTime: e.target.value})} className={`p-3 rounded-2xl border ${styles.input}`} />
+                                                        <input type="time" value={formData.endTime} onChange={e => setFormData({...formData, endTime: e.target.value})} className={`p-3 rounded-2xl border ${styles.input}`} />
+                                                    </div>
+                                                    <input type="number" placeholder="Pausa (min)" value={formData.breakMinutes} onChange={e => setFormData({...formData, breakMinutes: parseInt(e.target.value) || 0})} className={`p-3 rounded-2xl border ${styles.input}`} />
+                                                </div>
+                                            )}
+                                            <textarea placeholder="Note..." value={formData.notes} onChange={e => setFormData({...formData, notes: e.target.value})} className={`p-3 rounded-2xl border ${styles.input} h-20 resize-none`} />
+                                            <button onClick={saveEntry} className="w-full bg-indigo-600 text-white p-4 rounded-3xl font-bold shadow-lg">Salva</button>
+                                        </div>
+                                    </div>
+                                )}
+
+                                {activeModule === 'export' && (
+                                    <div className="space-y-4">
+                                        <h2 className="text-lg font-bold text-emerald-600">Esporta Report PDF</h2>
+                                        <button onClick={() => exportPDF('all')} className="w-full p-4 rounded-2xl bg-gray-100 dark:bg-gray-700 font-bold text-sm">Tutto lo Storico</button>
+                                        <div className="border-t border-gray-100 dark:border-gray-700 pt-4 space-y-3">
+                                            <p className="text-[10px] uppercase opacity-50 ml-2">Oppure seleziona periodo</p>
+                                            <div className="grid grid-cols-2 gap-2">
+                                                <input type="date" onChange={e => setExportRange({...exportRange, start: e.target.value})} className={`p-2 text-xs rounded-xl border ${styles.input}`} />
+                                                <input type="date" onChange={e => setExportRange({...exportRange, end: e.target.value})} className={`p-2 text-xs rounded-xl border ${styles.input}`} />
+                                            </div>
+                                            <button onClick={() => exportPDF('range')} className="w-full bg-emerald-600 text-white p-4 rounded-3xl font-bold">Genera PDF Periodo</button>
+                                        </div>
+                                    </div>
+                                )}
+
+                                {activeModule === 'settings' && (
+                                    <div className="space-y-6">
+                                        <h2 className="text-xl font-bold text-center">Impostazioni</h2>
+                                        <div><label className="text-[10px] font-bold opacity-50 mb-2 block uppercase">Ore giornaliere standard</label><input type="number" value={standardHoursPerDay} onChange={e => setStandardHoursPerDay(parseFloat(e.target.value))} className={`w-full p-4 rounded-2xl border ${styles.input} text-lg font-bold`} /></div>
+                                        <div><label className="text-[10px] font-bold opacity-50 mb-2 block uppercase">Ore settimanali standard</label><input type="number" value={standardHoursPerWeek} onChange={e => setStandardHoursPerWeek(parseFloat(e.target.value))} className={`w-full p-4 rounded-2xl border ${styles.input} text-lg font-bold`} /></div>
+                                        <button onClick={() => setActiveModule(null)} className="w-full bg-indigo-600 text-white p-4 rounded-3xl font-bold shadow-lg">Chiudi</button>
+                                    </div>
+                                )}
+
+                                {activeModule === 'balance' && (
+                                    <div className="space-y-6">
+                                        <h2 className="text-xl font-bold text-center text-purple-600">Saldo Iniziale</h2>
+                                        <input type="number" value={initialOvertimeBalance} onChange={e => setInitialOvertimeBalance(parseFloat(e.target.value) || 0)} className={`w-full p-5 rounded-3xl border ${styles.input} text-center text-3xl font-bold`} />
+                                        <button onClick={() => setActiveModule(null)} className="w-full bg-purple-600 text-white p-4 rounded-3xl font-bold shadow-lg">Salva</button>
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<TimesheetApp />);
+    </script>
+</body>
+</html>
