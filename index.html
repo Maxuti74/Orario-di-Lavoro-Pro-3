@@ -67,7 +67,7 @@
             const [activeModule, setActiveModule] = useState(null); 
             const [formData, setFormData] = useState({
                 date: new Date().toISOString().split('T')[0],
-                type: 'Lavoro', startTime: '09:00', endTime: '18:00', breakMinutes: 60, notes: ''
+                type: 'Lavoro', startTime: '10:00', endTime: '19:00', breakMinutes: 30, notes: ''
             });
 
             const [exportRange, setExportRange] = useState({ start: '', end: '' });
@@ -335,4 +335,5 @@
         root.render(<TimesheetApp />);
     </script>
 </body>
+
 </html>
